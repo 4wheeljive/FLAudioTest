@@ -1,7 +1,6 @@
 #include <FastLED.h>
 #include "fl/audio_input.h"
 #include "fl/audio.h"
-//#include "fl/audio/audio_context.h"
 #include "fl/fx/audio/audio_processor.h"
 #include "fl/time_alpha.h"
 
@@ -81,7 +80,7 @@ void setup() {
 	Serial.begin(115200);
 	delay(1000);
 
-	/*
+	
     FastLED.setExclusiveDriver("RMT");
 
 	FastLED.addLeds<WS2812B, PIN0, GRB>(leds, 0, NUM_LEDS_PER_STRIP)
@@ -101,20 +100,19 @@ void setup() {
 
 	FastLED.clear();
 	FastLED.show();
-    */
 
 	fl::string errorMsg;
 	audioInput = fl::IAudioInput::create(config, &errorMsg);
 	audioInput->start();
 
-    /*audioProcessor.onBeat([]() {
+    audioProcessor.onBeat([]() {
         beatCount++;
         lastBeatTime = fl::millis();
         Serial.print("BEAT #");
         Serial.println(beatCount);
-        //beatBrightness = 255;   // Reset brightness on each beat
-        //hue += 32;              // Shift color on each beat
-    });*/
+        beatBrightness = 255;   // Reset brightness on each beat
+        hue += 32;              // Shift color on each beat
+    });
 
     //audioProcessor.onVocal([](bool active) {
     //    vocalRainbow();
@@ -138,7 +136,7 @@ void setup() {
 
 // **************************************************************
 
-/*void beatPulse() {
+void beatPulse() {
 
     FastLED.clear();
     CHSV color = CHSV(hue,255,beatBrightness);
@@ -151,7 +149,7 @@ void setup() {
         beatBrightness = 0;
     }
 
-}*/
+}
 
 /*void vocalRainbow() {
     FastLED.clear();
@@ -163,15 +161,15 @@ void setup() {
 
 void loop(){
     
-    EVERY_N_SECONDS(5) {
-	 	FASTLED_DBG("Loop");
-	}
+    //EVERY_N_SECONDS(5) {
+	// 	FASTLED_DBG("Loop");
+	//}
 
 	while (fl::AudioSample sample = audioInput->read()) {
         audioProcessor.update(sample);
 	}
 
-    //beatPulse();
-    //FastLED.show();
+    beatPulse();
+    FastLED.show();
 
 }
