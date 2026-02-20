@@ -70,8 +70,9 @@ float currentBPM = 0.0f;
 uint32_t lastBeatTime = 0;
 uint32_t beatCount = 0;
 uint32_t onsetCount = 0;
+bool vocalsActive = false;
 
-//void vocalRainbow();
+void vocalRainbow();
 
 // **************************************************************
 
@@ -111,12 +112,26 @@ void setup() {
         Serial.print("BEAT #");
         Serial.println(beatCount);
         beatBrightness = 255;   // Reset brightness on each beat
-        hue += 32;              // Shift color on each beat
+        //hue += 32;              // Shift color on each beat
     });
 
-    //audioProcessor.onVocal([](bool active) {
-    //    vocalRainbow();
-    //});
+    audioProcessor.onVocalStart([]() {
+        vocalsActive = true;
+    });
+
+    audioProcessor.onVocalEnd([]() {
+        vocalsActive = false;
+    });
+
+    audioProcessor.onVocalConfidence([](float confidence) {
+        static uint32_t lastPrint = 0;
+        if (fl::millis() - lastPrint > 200) {
+            Serial.print("Vocal confidence: ");
+            Serial.println(confidence);
+            lastPrint = fl::millis();
+        }
+    });
+
 
     audioProcessor.onBass([](float level) {
         if (level > 0.01f) {
@@ -151,11 +166,11 @@ void beatPulse() {
 
 }
 
-/*void vocalRainbow() {
+void vocalRainbow() {
     FastLED.clear();
     fill_rainbow(leds, NUM_LEDS, hue, 7);
-    hue ++;
-}*/
+    hue++;
+}
 
 // **************************************************************
 
@@ -169,7 +184,11 @@ void loop(){
         audioProcessor.update(sample);
 	}
 
-    beatPulse();
+    if (vocalsActive) {
+        vocalRainbow();
+    } else {
+        beatPulse();
+    }
     FastLED.show();
 
 }
