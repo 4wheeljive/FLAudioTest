@@ -1,7 +1,8 @@
 #include <FastLED.h>
 #include "fl/audio_input.h"
 #include "fl/audio.h"
-#include "fl/fx/audio/audio_processor.h"
+#include "fl/audio/audio_processor.h"
+#include "fl/audio/audio_detector.h"
 #include "fl/time_alpha.h"
 
 bool debug = true;
@@ -71,8 +72,7 @@ uint32_t lastBeatTime = 0;
 uint32_t beatCount = 0;
 uint32_t onsetCount = 0;
 bool vocalsActive = false;
-
-void vocalRainbow();
+uint8_t vocalLevel = 0;
 
 // **************************************************************
 
@@ -80,7 +80,6 @@ void setup() {
 		
 	Serial.begin(115200);
 	delay(1000);
-
 	
     FastLED.setExclusiveDriver("RMT");
 
@@ -123,17 +122,17 @@ void setup() {
         vocalsActive = false;
     });
 
-    audioProcessor.onVocalConfidence([](float confidence) {
+    /*audioProcessor.onVocalConfidence([](float confidence) {
         static uint32_t lastPrint = 0;
         if (fl::millis() - lastPrint > 200) {
             Serial.print("Vocal confidence: ");
             Serial.println(confidence);
             lastPrint = fl::millis();
         }
-    });
+    });*/
 
 
-    audioProcessor.onBass([](float level) {
+    /*audioProcessor.onBass([](float level) {
         if (level > 0.01f) {
             Serial.print("Bass: ");
             Serial.println(level);
@@ -145,7 +144,7 @@ void setup() {
             Serial.print("Treble: ");
             Serial.println(level);
         }
-    });
+    });*/
 
 }
 
@@ -166,8 +165,11 @@ void beatPulse() {
 
 }
 
-void vocalRainbow() {
+void vocalResponse() {
     FastLED.clear();
+    vocalLevel = audioProcessor.getVocalConfidence();
+    CHSV color = CHSV(hue,255,vocalLevel);
+    fill_solid(leds, NUM_LEDS, color);  
     fill_rainbow(leds, NUM_LEDS, hue, 7);
     hue++;
 }
@@ -176,16 +178,18 @@ void vocalRainbow() {
 
 void loop(){
     
-    //EVERY_N_SECONDS(5) {
-	// 	FASTLED_DBG("Loop");
-	//}
+    EVERY_N_MILLISECONDS(500) {
+	    //FASTLED_DBG("Loop");
+        FASTLED_DBG("Vocals active: " << vocalsActive
+                    << " Vocal level: " << vocalLevel);
+	}
 
 	while (fl::AudioSample sample = audioInput->read()) {
         audioProcessor.update(sample);
 	}
 
     if (vocalsActive) {
-        vocalRainbow();
+        vocalResponse();
     } else {
         beatPulse();
     }
