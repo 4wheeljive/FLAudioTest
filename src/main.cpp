@@ -72,7 +72,10 @@ uint32_t lastBeatTime = 0;
 uint32_t beatCount = 0;
 uint32_t onsetCount = 0;
 bool vocalsActive = false;
-uint8_t vocalLevel = 0;
+uint8_t vocalConfidence = 0;
+uint8_t vocalConfidenceEMA = 0;
+uint8_t smoothedVocalConfidence = 0;
+uint8_t scaledVocalConfidence = 0;
 
 // **************************************************************
 
@@ -96,7 +99,7 @@ void setup() {
 			.setCorrection(TypicalLEDStrip);
 	#endif
 
-	FastLED.setBrightness(50);
+	FastLED.setBrightness(75);
 
 	FastLED.clear();
 	FastLED.show();
@@ -165,34 +168,45 @@ void beatPulse() {
 
 }
 
+uint8_t smoothVocalConfidence(uint8_t level) {
+    constexpr float attack  = 0.35f;  // 0.35 fast rise on spikes
+    constexpr float release = 0.20f;  // 0.04f = slow decay
+    float alpha  = (level > vocalConfidenceEMA) ? attack : release;
+    vocalConfidenceEMA += alpha * (level - vocalConfidenceEMA);
+    return vocalConfidenceEMA;
+ }
+
 void vocalResponse() {
     FastLED.clear();
-    vocalLevel = audioProcessor.getVocalConfidence();
-    CHSV color = CHSV(hue,255,vocalLevel);
+    vocalConfidence = audioProcessor.getVocalConfidence();
+    smoothedVocalConfidence = smoothVocalConfidence(vocalConfidence);
+    scaledVocalConfidence = fl::map_range_clamped<uint8_t, uint8_t>(smoothedVocalConfidence, 0, 150, 0, 255);
+    CHSV color = CHSV(0,255,scaledVocalConfidence);
     fill_solid(leds, NUM_LEDS, color);  
-    fill_rainbow(leds, NUM_LEDS, hue, 7);
-    hue++;
+    //hue++;
 }
 
 // **************************************************************
 
 void loop(){
     
-    EVERY_N_MILLISECONDS(500) {
-	    //FASTLED_DBG("Loop");
-        FASTLED_DBG("Vocals active: " << vocalsActive
-                    << " Vocal level: " << vocalLevel);
+    EVERY_N_MILLISECONDS(250) {
+        FASTLED_DBG("Vox active: " << vocalsActive
+                    << " Vox conf: " << vocalConfidence
+                    << " Smoothed vox conf: " << smoothedVocalConfidence
+                    << " Scaled vox conf: " << scaledVocalConfidence
+        );
 	}
 
 	while (fl::AudioSample sample = audioInput->read()) {
         audioProcessor.update(sample);
 	}
 
-    if (vocalsActive) {
+    //if (vocalsActive) {
         vocalResponse();
-    } else {
-        beatPulse();
-    }
+    //} else {
+    //    beatPulse();
+    //}
     FastLED.show();
 
 }
