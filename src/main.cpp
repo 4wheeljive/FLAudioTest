@@ -72,7 +72,7 @@ uint32_t lastBeatTime = 0;
 uint32_t beatCount = 0;
 uint32_t onsetCount = 0;
 bool vocalsActive = false;
-uint8_t vocalConfidence = 0;
+float vocalConfidence = 0.0f;
 uint8_t vocalConfidenceEMA = 0;
 uint8_t smoothedVocalConfidence = 0;
 uint8_t scaledVocalConfidence = 0;
@@ -107,6 +107,7 @@ void setup() {
 	fl::string errorMsg;
 	audioInput = fl::IAudioInput::create(config, &errorMsg);
 	audioInput->start();
+    audioProcessor.setAutoGainEnabled(true);
 
     audioProcessor.onBeat([]() {
         beatCount++;
@@ -124,30 +125,6 @@ void setup() {
     audioProcessor.onVocalEnd([]() {
         vocalsActive = false;
     });
-
-    /*audioProcessor.onVocalConfidence([](float confidence) {
-        static uint32_t lastPrint = 0;
-        if (fl::millis() - lastPrint > 200) {
-            Serial.print("Vocal confidence: ");
-            Serial.println(confidence);
-            lastPrint = fl::millis();
-        }
-    });*/
-
-
-    /*audioProcessor.onBass([](float level) {
-        if (level > 0.01f) {
-            Serial.print("Bass: ");
-            Serial.println(level);
-        }
-    });
-
-    audioProcessor.onTreble([](float level) {
-        if (level > 0.01f) {
-            Serial.print("Treble: ");
-            Serial.println(level);
-        }
-    });*/
 
 }
 
@@ -168,19 +145,19 @@ void beatPulse() {
 
 }
 
-uint8_t smoothVocalConfidence(uint8_t level) {
+/*uint8_t smoothVocalConfidence(uint8_t level) {
     constexpr float attack  = 0.35f;  // 0.35 fast rise on spikes
     constexpr float release = 0.20f;  // 0.04f = slow decay
     float alpha  = (level > vocalConfidenceEMA) ? attack : release;
     vocalConfidenceEMA += alpha * (level - vocalConfidenceEMA);
     return vocalConfidenceEMA;
- }
+ }*/
 
 void vocalResponse() {
     FastLED.clear();
     vocalConfidence = audioProcessor.getVocalConfidence();
-    smoothedVocalConfidence = smoothVocalConfidence(vocalConfidence);
-    scaledVocalConfidence = fl::map_range_clamped<uint8_t, uint8_t>(smoothedVocalConfidence, 0, 150, 0, 255);
+    //smoothedVocalConfidence = smoothVocalConfidence(vocalConfidence);
+    scaledVocalConfidence = fl::map_range_clamped<float, uint8_t>(vocalConfidence, 0.0f, 0.7f, 0, 255);
     CHSV color = CHSV(0,255,scaledVocalConfidence);
     fill_solid(leds, NUM_LEDS, color);  
     //hue++;
@@ -191,10 +168,17 @@ void vocalResponse() {
 void loop(){
     
     EVERY_N_MILLISECONDS(250) {
+        float bass = audioProcessor.getBassLevel();
+        float mid = audioProcessor.getMidLevel();
+        float treble = audioProcessor.getTrebleLevel();
+
+        FASTLED_DBG("Bass: " << bass
+                    << " Mid: " << mid
+                    << " Treb: " << treble
+        );
         FASTLED_DBG("Vox active: " << vocalsActive
                     << " Vox conf: " << vocalConfidence
-                    << " Smoothed vox conf: " << smoothedVocalConfidence
-                    << " Scaled vox conf: " << scaledVocalConfidence
+                    << " Smoothed vox conf: " << scaledVocalConfidence
         );
 	}
 
@@ -202,11 +186,11 @@ void loop(){
         audioProcessor.update(sample);
 	}
 
-    //if (vocalsActive) {
+    if (scaledVocalConfidence > 0.05f) {
         vocalResponse();
-    //} else {
-    //    beatPulse();
-    //}
+    } else {
+        beatPulse();
+    }
     FastLED.show();
 
 }
