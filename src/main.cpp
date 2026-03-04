@@ -4,11 +4,12 @@
 #include "fl/audio/audio_processor.h"
 #include "fl/audio/audio_detector.h"
 #include "fl/time_alpha.h"
+#include "vibe_display.h"
 
 bool debug = true;
 
-//#define BIG_BOARD
-#undef BIG_BOARD
+#define BIG_BOARD
+//#undef BIG_BOARD
 
 #define PIN0 2
 
@@ -48,9 +49,6 @@ uint16_t myXY(uint8_t x, uint8_t y) {
 	return ledNum;
 }
 
-uint8_t hue = 0;
-uint8_t beatBrightness = 0;  // Decaying brightness for beat pulse
-
 using namespace fl;
 
 // Audio setup ***************************************************
@@ -64,18 +62,7 @@ fl::AudioConfigI2S i2sConfig(I2S_WS_PIN, I2S_SD_PIN, I2S_CLK_PIN, 0, I2S_CHANNEL
 fl::AudioConfig config(i2sConfig);
 fl::shared_ptr<fl::IAudioInput> audioInput;
 
-fl::AudioProcessor audioProcessor;
-
-// Beat detection state
-float currentBPM = 0.0f;
-uint32_t lastBeatTime = 0;
-uint32_t beatCount = 0;
-uint32_t onsetCount = 0;
-bool vocalsActive = false;
-float vocalConfidence = 0.0f;
-uint8_t vocalConfidenceEMA = 0;
-uint8_t smoothedVocalConfidence = 0;
-uint8_t scaledVocalConfidence = 0;
+fl::shared_ptr<fl::AudioProcessor> audioProcessor;
 
 // **************************************************************
 
@@ -99,7 +86,7 @@ void setup() {
 			.setCorrection(TypicalLEDStrip);
 	#endif
 
-	FastLED.setBrightness(75);
+	FastLED.setBrightness(50);
 
 	FastLED.clear();
 	FastLED.show();
@@ -107,90 +94,21 @@ void setup() {
 	fl::string errorMsg;
 	audioInput = fl::IAudioInput::create(config, &errorMsg);
 	audioInput->start();
-    audioProcessor.setAutoGainEnabled(true);
+    audioProcessor = fl::make_shared<fl::AudioProcessor>();
+    //audioProcessor->setGain(2.0f);
 
-    audioProcessor.onBeat([]() {
-        beatCount++;
-        lastBeatTime = fl::millis();
-        Serial.print("BEAT #");
-        Serial.println(beatCount);
-        beatBrightness = 255;   // Reset brightness on each beat
-        //hue += 32;              // Shift color on each beat
-    });
-
-    audioProcessor.onVocalStart([]() {
-        vocalsActive = true;
-    });
-
-    audioProcessor.onVocalEnd([]() {
-        vocalsActive = false;
-    });
-
-}
-
-// **************************************************************
-
-void beatPulse() {
-
-    FastLED.clear();
-    CHSV color = CHSV(hue,255,beatBrightness);
-    fill_solid(leds, NUM_LEDS, color);  
-
-    // Decay the brightness
-    if (beatBrightness > 10) {
-        beatBrightness = beatBrightness * 0.85f;  // Exponential decay
-    } else {
-        beatBrightness = 0;
-    }
-
-}
-
-/*uint8_t smoothVocalConfidence(uint8_t level) {
-    constexpr float attack  = 0.35f;  // 0.35 fast rise on spikes
-    constexpr float release = 0.20f;  // 0.04f = slow decay
-    float alpha  = (level > vocalConfidenceEMA) ? attack : release;
-    vocalConfidenceEMA += alpha * (level - vocalConfidenceEMA);
-    return vocalConfidenceEMA;
- }*/
-
-void vocalResponse() {
-    FastLED.clear();
-    vocalConfidence = audioProcessor.getVocalConfidence();
-    //smoothedVocalConfidence = smoothVocalConfidence(vocalConfidence);
-    scaledVocalConfidence = fl::map_range_clamped<float, uint8_t>(vocalConfidence, 0.0f, 0.7f, 0, 255);
-    CHSV color = CHSV(0,255,scaledVocalConfidence);
-    fill_solid(leds, NUM_LEDS, color);  
-    //hue++;
+    vibeSetup(audioProcessor, leds, WIDTH, HEIGHT, myXY);
 }
 
 // **************************************************************
 
 void loop(){
-    
-    EVERY_N_MILLISECONDS(250) {
-        float bass = audioProcessor.getBassLevel();
-        float mid = audioProcessor.getMidLevel();
-        float treble = audioProcessor.getTrebleLevel();
-
-        FASTLED_DBG("Bass: " << bass
-                    << " Mid: " << mid
-                    << " Treb: " << treble
-        );
-        FASTLED_DBG("Vox active: " << vocalsActive
-                    << " Vox conf: " << vocalConfidence
-                    << " Smoothed vox conf: " << scaledVocalConfidence
-        );
-	}
 
 	while (fl::AudioSample sample = audioInput->read()) {
-        audioProcessor.update(sample);
+        audioProcessor->update(sample);
 	}
 
-    if (scaledVocalConfidence > 0.05f) {
-        vocalResponse();
-    } else {
-        beatPulse();
-    }
+    vibeLoop();
     FastLED.show();
 
 }
