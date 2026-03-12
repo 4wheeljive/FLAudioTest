@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(h|cpp\\)$\")",
+      "Bash(gh api repos/FastLED/FastLED/issues/2193/comments --paginate --jq '.[].body')",
+      "Bash(gh issue view 2193 --repo FastLED/FastLED --comments)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.github.com)"
+    ]
+  }
+}

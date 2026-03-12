@@ -1,15 +1,17 @@
 #include <FastLED.h>
-#include "fl/audio_input.h"
-#include "fl/audio.h"
+#include "fl/audio/audio_input.h"
+#include "fl/audio/audio.h"
 #include "fl/audio/audio_processor.h"
 #include "fl/audio/audio_detector.h"
-#include "fl/time_alpha.h"
 #include "vibe_display.h"
+#include "vibe_factor_demo.h"
 
 bool debug = true;
+float bassLevel = 0;
+float bassHue = 0;
 
-#define BIG_BOARD
-//#undef BIG_BOARD
+//#define BIG_BOARD
+#undef BIG_BOARD
 
 #define PIN0 2
 
@@ -69,6 +71,7 @@ fl::shared_ptr<fl::AudioProcessor> audioProcessor;
 void setup() {
 		
 	Serial.begin(115200);
+	Serial.setTxTimeoutMs(1);  // 1ms timeout — avoids unsigned underflow
 	delay(1000);
 	
     FastLED.setExclusiveDriver("RMT");
@@ -86,7 +89,7 @@ void setup() {
 			.setCorrection(TypicalLEDStrip);
 	#endif
 
-	FastLED.setBrightness(50);
+	FastLED.setBrightness(35);
 
 	FastLED.clear();
 	FastLED.show();
@@ -98,17 +101,28 @@ void setup() {
     //audioProcessor->setGain(2.0f);
 
     vibeSetup(audioProcessor, leds, WIDTH, HEIGHT, myXY);
+	//factorDemoSetup(audioProcessor, leds, WIDTH, HEIGHT, myXY);
+
 }
 
 // **************************************************************
 
 void loop(){
 
+	/*EVERY_N_MILLISECONDS(10) {
+		FASTLED_DBG(   "Bass level " << bassLevel
+					<< " Hue "       << bassHue
+		);
+	}*/
+
 	while (fl::AudioSample sample = audioInput->read()) {
         audioProcessor->update(sample);
 	}
 
     vibeLoop();
+	//factorDemoLoop();
+
+	fadeToBlackBy(leds, NUM_LEDS, 20);
     FastLED.show();
 
 }

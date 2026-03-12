@@ -8,21 +8,7 @@ static XYMapFunc sXY = nullptr;
 static uint8_t sW = 0;
 static uint8_t sH = 0;
 static uint16_t sNumLeds = 0;
-
 static uint8_t sBaseHue = 0;
-
-// Per-band ripple state
-static float   sBassRippleRadius = 999.0f;
-static uint8_t sBassRippleBright = 0;
-static float   sMidRippleRadius = 999.0f;
-static uint8_t sMidRippleBright = 0;
-
-static uint32_t sBassSpikes = 0;
-static uint32_t sMidSpikes = 0;
-
-static float sCX = 0;
-static float sCY = 0;
-static float sMaxDist = 0;
 
 // ---------------------------------------------------------
 
@@ -37,26 +23,44 @@ void vibeSetup(fl::shared_ptr<fl::AudioProcessor> proc,
     sW    = width;
     sH    = height;
     sNumLeds = (uint16_t)width * height;
-
-    sCX = (width - 1) / 2.0f;
-    sCY = (height - 1) / 2.0f;
-    sMaxDist = sqrtf(sCX * sCX + sCY * sCY);
-
-    // Bass spike: big wide ripple + hue jump
-    proc->onVibeBassSpike([&]() {
-        sBassSpikes++;
-        sBassRippleRadius = 0.0f;
-        sBassRippleBright = 255;
-        sBaseHue += 32;
-    });
-
-    // Mid spike: thinner, faster ripple
-    proc->onVibeMidSpike([&]() {
-        sMidSpikes++;
-        sMidRippleRadius = 0.0f;
-        sMidRippleBright = 200;
-    });
 }
+
+// ---------------------------------------------------------
+
+struct avLeveler {
+    float ceiling;  // P90 tracker
+    float floor;    // P10 tracker
+    float value = 0.0f;
+
+    avLeveler(float initFloor = 0.5f, float initCeiling = 3.0f)
+        : ceiling(initCeiling), floor(initFloor) {}
+
+    // Call once per frame with a vibe value (getBass/getMid/getTreb)
+    float update(float v) {
+        constexpr float kRate = 0.015f;      // ~4s convergence at 30fps
+        constexpr float kMinRange = 0.3f;
+
+        // Robbins-Monro quantile estimation
+        // P90: 90% of values below ceiling, 10% above (beat peaks)
+        // P10: 10% of values below floor (quiet moments)
+        ceiling += kRate * ((v > ceiling) ? 0.9f : -0.1f);
+        floor   += kRate * ((v > floor)   ? 0.1f : -0.9f);
+
+        // Enforce minimum dynamic range
+        if (ceiling - floor < kMinRange) {
+            float mid = (ceiling + floor) * 0.5f;
+            ceiling = mid + kMinRange * 0.5f;
+            floor   = mid - kMinRange * 0.5f;
+        }
+
+        value = (v - floor) / (ceiling - floor);
+        if (value < 0.0f) value = 0.0f;
+        if (value > 1.0f) value = 1.0f;
+        return value;
+    }
+};
+
+avLeveler bassViz, midViz, trebViz;
 
 // ---------------------------------------------------------
 
@@ -64,124 +68,87 @@ void vibeLoop()
 {
     if (!sProc || !sLeds || !sXY) return;
 
-    // Read self-normalizing vibe levels (~1.0 = average)
-    float bass = sProc->getVibeBass();
-    float mid  = sProc->getVibeMid();
-    float treb = sProc->getVibeTreb();
-
-    // Clamp to useful display range: map ~0..2 to 0..1
-    auto normLevel = [](float v) -> float {
-        float n = v * 0.5f;  // 1.0 (average) -> 0.5 fill
-        if (n > 1.0f) n = 1.0f;
-        if (n < 0.0f) n = 0.0f;
-        return n;
-    };
-    float bassN = normLevel(bass);
-    float midN  = normLevel(mid);
-    float trebN = normLevel(treb);
+    // Read self-normalizing vibe levels (~1.0 = average, can spike to 10+)
+    // Then normalize to 0.0–1.0 via adaptive P10/P90 percentile tracking
+    float bassN = bassViz.update(sProc->getVibeBass());
+    float midN  = midViz.update(sProc->getVibeMid());
+    float trebN = trebViz.update(sProc->getVibeTreb());
 
     // --- Zone layout: bass=bottom, mid=middle, treble=top ---
-    uint8_t bassRows   = sH / 3;
-    uint8_t midRows    = sH / 3;
-    uint8_t trebleRows = sH - bassRows - midRows;
+    float trebleRows = sH / 4.0f; //- bassRows - midRows;
+    float midRows    = sH / 4.0f; // 3.0f
+    float bassRows   = sH / 4.0f; // 3.0f
 
-    uint8_t bassStart   = sH - bassRows;   // bottom
-    uint8_t midStart    = trebleRows;       // middle
-    // treble starts at row 0
+    // treble starts at row 1 (not 0)
+    float midStart    = trebleRows + 2.0f;        // middle
+    float bassStart   = midStart + midRows + 2.0f; // sH - bassRows;   // bottom
 
-    // Columns to light based on level (symmetric from center)
-    uint8_t bassCols   = (uint8_t)(bassN * sW);
-    uint8_t midCols    = (uint8_t)(midN  * sW);
-    uint8_t trebleCols = (uint8_t)(trebN * sW);
+    // Half-width of lit region (float, symmetric from center)
+    float center   = (sW - 1) / 2.0f;
+    float trebHalf = trebN * sW / 2.0f;
+    float midHalf  = midN  * sW / 2.0f;
+    float bassHalf = bassN * sW / 2.0f;
 
     // Slow hue drift
     EVERY_N_MILLISECONDS(50) { sBaseHue++; }
 
-    // Decay bass ripple brightness
-    if (sBassRippleBright > 4) {
-        sBassRippleBright = (uint8_t)(sBassRippleBright * 0.88f);
-    } else {
-        sBassRippleBright = 0;
-    }
-
-    // Decay mid ripple brightness (faster decay)
-    if (sMidRippleBright > 4) {
-        sMidRippleBright = (uint8_t)(sMidRippleBright * 0.82f);
-    } else {
-        sMidRippleBright = 0;
-    }
-
-    // Expand ripples quickly (~20-40ms to cross the display)
-    if (sBassRippleRadius < sMaxDist + 6.0f) {
-        sBassRippleRadius += 3.0f;
-    }
-    if (sMidRippleRadius < sMaxDist + 6.0f) {
-        sMidRippleRadius += 4.5f;  // Mid ripple moves faster
-    }
-
     // --- Clear and draw ---
     FastLED.clear();
 
-    uint8_t bassHue   = sBaseHue;
-    uint8_t midHue    = sBaseHue + 85;
-    uint8_t trebleHue = sBaseHue + 170;
+    float bassHue   = sBaseHue;
+    float midHue    = sBaseHue + 85.0f;
+    float trebleHue = sBaseHue + 170.0f;
 
-    // Helper: draw a band of rows with symmetric column fill
-    auto drawBand = [&](uint8_t yStart, uint8_t rows, uint8_t cols,
-                        uint8_t hue, uint8_t sat, float level) {
-        uint8_t rowBright = 140 + (uint8_t)(115.0f * level);
-        int halfCols = (int)(cols / 2);
-        int center = (int)(sW / 2);
-        for (uint8_t y = yStart; y < yStart + rows; y++) {
+    // Helper: draw a band with float precision.
+    // Pixels at the edge of the fill get fractional brightness for smooth edges.
+    // Brightness tapers from center toward edges.
+    auto drawBand = [&](float yStart, float rows, float halfWidth,
+                        float hue, float sat, float level) {
+        float peakBright = 140.0f + 115.0f * level;
+        float yEnd = yStart + rows;
+        for (uint8_t y = 0; y < sH; y++) {
+            // Vertical edge blending
+            float yFrac = 1.0f;
+            if ((float)y < yStart) {
+                yFrac = 1.0f - (yStart - (float)y);
+                if (yFrac <= 0.0f) continue;
+            } else if ((float)(y + 1) > yEnd) {
+                yFrac = yEnd - (float)y;
+                if (yFrac <= 0.0f) continue;
+            }
+
             for (uint8_t x = 0; x < sW; x++) {
-                int d = abs((int)x - center);
-                if (d < halfCols) {
-                    uint8_t b = (d * 4 < rowBright) ? rowBright - d * 4 : 0;
-                    sLeds[sXY(x, y)] = CHSV(hue, sat, b);
+                float dist = fabsf((float)x - center);
+                if (dist >= halfWidth) continue;
+
+                // Horizontal edge blending: fractional pixel at boundary
+                float xFrac = 1.0f;
+                if (dist > halfWidth - 1.0f) {
+                    xFrac = halfWidth - dist;
                 }
+
+                // Brightness tapers from center
+                float taper = 1.0f - (dist / (sW / 2.0f));
+                float bright = peakBright * taper * xFrac * yFrac;
+                if (bright > 255.0f) bright = 255.0f;
+
+                // Convert to 8-bit at the last moment
+                uint8_t h8 = (uint8_t)((int)hue & 0xFF);
+                uint8_t s8 = (uint8_t)sat;
+                uint8_t v8 = (uint8_t)bright;
+                sLeds[sXY(x, y)] = CHSV(h8, s8, v8);
             }
         }
     };
 
-    drawBand(bassStart,  bassRows,   bassCols,   bassHue,   240, bassN);
-    drawBand(midStart,   midRows,    midCols,    midHue,    220, midN);
-    drawBand(0,          trebleRows, trebleCols, trebleHue, 200, trebN);
+    drawBand(1.0f,       trebleRows, trebHalf, trebleHue, 200.0f, trebN);
+    drawBand(midStart,   midRows,    midHalf,  midHue,    220.0f, midN);
+    drawBand(bassStart,  bassRows,   bassHalf, bassHue,   240.0f, bassN);
 
-    // --- Ripples: expanding colored rings from center ---
-    // One pass through the pixel grid, check both ripples per pixel
-    for (uint8_t y = 0; y < sH; y++) {
-        for (uint8_t x = 0; x < sW; x++) {
-            float dx = (float)x - sCX;
-            float dy = (float)y - sCY;
-            float dist = sqrtf(dx * dx + dy * dy);
-
-            // Bass ripple: wide, warm-colored ring
-            if (sBassRippleBright > 0 && sBassRippleRadius < sMaxDist + 6.0f) {
-                float diff = fabsf(dist - sBassRippleRadius);
-                float ringWidth = 4.0f;
-                if (diff < ringWidth) {
-                    uint8_t rb = (uint8_t)((1.0f - diff / ringWidth) * sBassRippleBright);
-                    // Warm tinted ring (bass hue)
-                    sLeds[sXY(x, y)] += fl::CRGB(rb, rb / 3, 0);
-                }
-            }
-
-            // Mid ripple: thinner, cool-colored ring
-            if (sMidRippleBright > 0 && sMidRippleRadius < sMaxDist + 6.0f) {
-                float diff = fabsf(dist - sMidRippleRadius);
-                float ringWidth = 2.0f;
-                if (diff < ringWidth) {
-                    uint8_t rb = (uint8_t)((1.0f - diff / ringWidth) * sMidRippleBright);
-                    // Cool tinted ring (mid/cyan)
-                    sLeds[sXY(x, y)] += fl::CRGB(0, rb, rb / 2);
-                }
-            }
-        }
-    }
-
-    // Debug
+    // Debug: raw vibe values + normalized 0-1 output
     EVERY_N_MILLISECONDS(500) {
-        Serial.printf("vB=%.2f vM=%.2f vT=%.2f bassSpk=%lu midSpk=%lu hue=%d\n",
-            bass, mid, treb, (unsigned long)sBassSpikes, (unsigned long)sMidSpikes, sBaseHue);
+        Serial.printf("vB=%.2f vM=%.2f vT=%.2f  nB=%.2f nM=%.2f nT=%.2f  hue=%d\n",
+            sProc->getVibeBass(), sProc->getVibeMid(), sProc->getVibeTreb(),
+            bassN, midN, trebN, sBaseHue);
     }
 }
